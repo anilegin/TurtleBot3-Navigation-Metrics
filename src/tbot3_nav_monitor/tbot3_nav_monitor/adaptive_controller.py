@@ -1,0 +1,333 @@
+import rclpy
+from rclpy.node import Node
+
+from rcl_interfaces.msg import Parameter
+from rcl_interfaces.msg import ParameterValue
+from rcl_interfaces.msg import ParameterType
+from rcl_interfaces.srv import SetParameters
+
+from tbot3_nav_monitor_msgs.msg import NavigationMetrics
+
+
+class AdaptiveController(Node):
+
+    def __init__(self):
+        super().__init__('adaptive_controller')
+        
+        self.get_logger().info('Adaptive Controller Started')
+
+        self.controller_node = '/controller_server'
+        
+        ## adapting vel if robot often stucks
+        self.normal_max_velocity = 0.26 # default vel for tbot3 conf 
+        self.reduced_max_velocity = 0.10
+
+        self.stuck_threshold = 3
+        self.velocity_reduced = False
+        
+        # goal tolerance when nav accuracy is poor
+        self.normal_goal_tolerance = 0.15 #default for tbot3
+        self.relaxed_goal_tolerance = 0.30
+
+        self.goal_struggle_counter = 0
+        self.goal_struggle_threshold = 8
+        self.goal_tolerance_relaxed = False
+        
+        ## path planner adjustment
+        self.normal_inflation_radius = 0.30 #default for tbot3
+        self.conservative_inflation_radius = 0.60
+
+        self.bad_efficiency_counter = 0
+        self.bad_efficiency_threshold = 5
+
+        self.conservative_mode_enabled = False
+        
+        ## local costmap update based on env compelxity
+        self.normal_cost_scaling_factor = 3.0
+        self.complex_cost_scaling_factor = 10.0
+
+        self.complex_environment_counter = 0
+        self.complex_environment_threshold = 5
+
+        self.complex_environment_enabled = False
+
+        # param update 
+        self.param_client = self.create_client(
+            SetParameters,
+            f'{self.controller_node}/set_parameters'
+        )
+        
+        # cost map param update
+        self.local_costmap_client = self.create_client(
+            SetParameters,
+            '/local_costmap/local_costmap/set_parameters'
+        )
+
+        self.global_costmap_client = self.create_client(
+            SetParameters,
+            '/global_costmap/global_costmap/set_parameters'
+        )
+
+        
+        ## our custom navigation metrics
+        self.create_subscription(
+            NavigationMetrics,
+            '/navigation_metrics',
+            self.metrics_callback,
+            10
+        )
+
+
+    def metrics_callback(self, msg):
+
+        if not self.param_client.wait_for_service(timeout_sec=0.1):
+            self.get_logger().warn('Controller parameter service not available yet.')
+            return
+
+        if msg.stuck_count >= self.stuck_threshold and not self.velocity_reduced:
+            self.set_max_velocity(self.reduced_max_velocity)
+            self.velocity_reduced = True
+            self.get_logger().warn(
+                f'Stuck count high. Reducing max velocity to {self.reduced_max_velocity}'
+            )
+
+        elif msg.stuck_count < self.stuck_threshold and self.velocity_reduced:
+            self.set_max_velocity(self.normal_max_velocity)
+            self.velocity_reduced = False
+            self.get_logger().info(
+                f'Stuck count normal. Restoring max velocity to {self.normal_max_velocity}'
+            )
+        
+        self.update_goal_tolerance(msg)
+        self.update_conservative_planning(msg)
+        self.update_environment_complexity(msg)
+        
+    def update_goal_tolerance(self, msg):
+        """
+        If robot is near 50cm radius of the goal but not reaching it while moving slowly we increase the goal tolerance
+        old (default): 0.15m
+        new : 0.30m
+        """
+        
+        near_goal = msg.navigation_accuracy < 0.50
+        not_reached = not msg.goal_reached
+        moving_slowly = abs(msg.actual_speed) < 0.10
+        trying_to_finish = abs(msg.commanded_speed) < 0.15
+
+        struggling_near_goal = (
+            near_goal and
+            not_reached and
+            moving_slowly and
+            trying_to_finish
+        )
+
+        if struggling_near_goal:
+            self.goal_struggle_counter += 1
+        else:
+            self.goal_struggle_counter = 0
+
+        if (
+            self.goal_struggle_counter >= self.goal_struggle_threshold
+            and not self.goal_tolerance_relaxed
+        ):
+            self.set_goal_tolerance(self.relaxed_goal_tolerance)
+            self.goal_tolerance_relaxed = True
+
+            self.get_logger().warn(
+                f'Robot is struggling near goal. Increasing goal tolerance to {self.relaxed_goal_tolerance}'
+            )
+
+        if msg.goal_reached and self.goal_tolerance_relaxed:
+            self.set_goal_tolerance(self.normal_goal_tolerance)
+            self.goal_tolerance_relaxed = False
+            self.goal_struggle_counter = 0
+
+            self.get_logger().info(
+                f'Goal reached. Restoring goal tolerance to {self.normal_goal_tolerance}'
+            )
+        
+    def update_conservative_planning(self, msg):
+        """
+            Nav2 uses NavFn which is basically Dijkstra + A* planner.
+            the parameters we adjusted are:
+            inflation radius: this adds artificial block around the obstacle so that robot tries to stay away more
+            
+            if robot hits obstacles often we increase the radius to 60cm from 30cm
+            to avoid getting too close to obstacles.
+        """
+    
+        poor_efficiency = (
+            msg.obstacle_avoidance_efficiency > 1.8
+        )
+
+        if poor_efficiency:
+            self.bad_efficiency_counter += 1
+        else:
+            self.bad_efficiency_counter = 0
+
+        if (
+            self.bad_efficiency_counter >= self.bad_efficiency_threshold
+            and not self.conservative_mode_enabled
+        ):
+
+            self.set_inflation_radius(
+                self.conservative_inflation_radius
+            )
+
+            self.conservative_mode_enabled = True
+
+            self.get_logger().warn(
+                f'Poor obstacle avoidance efficiency detected. '
+                f'Enabling conservative planning mode.'
+            )
+
+        elif (
+            self.bad_efficiency_counter == 0
+            and self.conservative_mode_enabled
+        ):
+
+            self.set_inflation_radius(
+                self.normal_inflation_radius
+            )
+
+            self.conservative_mode_enabled = False
+
+            self.get_logger().info(
+                f'Obstacle avoidance efficiency normalized. '
+                f'Restoring normal planning mode.'
+            )
+            
+    def update_environment_complexity(self, msg):
+        """
+        based on our monitored metrics we 
+
+        obstacle_density: is the fraction of laser readings that are hitting something nearby
+        environment_complexity: is tends to increase when there are many nearby obstacles around the robot. 
+
+        we adjust cost_scaling_factor of the local costmap, this is quite similar to inflation radius 
+        but it affects the cost values in a more continuous way. 
+        higher cost scaling factor means that the cost of cells near obstacles will increase greater,
+        which also makes the planner more conservative in its path selection.
+        
+        """
+
+        complex_environment = (
+            msg.obstacle_density > 0.35 or
+            msg.environment_complexity > 0.8 or
+            msg.mean_obstacle_distance < 1.0
+        )
+
+        if complex_environment:
+            self.complex_environment_counter += 1
+        else:
+            self.complex_environment_counter = 0
+
+        if (
+            self.complex_environment_counter >= self.complex_environment_threshold
+            and not self.complex_environment_enabled
+        ):
+            self.set_cost_scaling_factor(self.complex_cost_scaling_factor)
+            self.complex_environment_enabled = True
+
+            self.get_logger().warn(
+                f'Complex environment detected. '
+                f'Increasing local costmap cost scaling factor to '
+                f'{self.complex_cost_scaling_factor}'
+            )
+
+        elif (
+            self.complex_environment_counter == 0
+            and self.complex_environment_enabled
+        ):
+            self.set_cost_scaling_factor(self.normal_cost_scaling_factor)
+            self.complex_environment_enabled = False
+
+            self.get_logger().info(
+                f'Environment complexity normalized. '
+                f'Restoring local costmap cost scaling factor to '
+                f'{self.normal_cost_scaling_factor}'
+            )
+
+    def set_max_velocity(self, value):
+        
+        # these are responsible for planner's commanded velocities. 
+        params = [
+            self.make_double_param('FollowPath.max_vel_x', value),
+            self.make_double_param('FollowPath.max_speed_xy', value),
+        ]
+
+        request = SetParameters.Request()
+        request.parameters = params
+
+        self.param_client.call_async(request)
+
+
+    def make_double_param(self, name, value):
+
+        param = Parameter()
+        param.name = name
+        param.value = ParameterValue(
+            type=ParameterType.PARAMETER_DOUBLE,
+            double_value=float(value)
+        )
+
+        return param
+    
+            
+    def set_goal_tolerance(self, value):
+    
+        params = [
+            self.make_double_param(
+                'general_goal_checker.xy_goal_tolerance',
+                value
+            ),
+            self.make_double_param(
+                'FollowPath.xy_goal_tolerance',
+                value
+            )
+        ]
+
+        request = SetParameters.Request()
+        request.parameters = params
+
+        self.param_client.call_async(request)
+        
+    def set_inflation_radius(self, value):
+    
+        params = [
+            self.make_double_param(
+                'inflation_layer.inflation_radius',
+                value
+            )
+        ]
+
+        request = SetParameters.Request()
+        request.parameters = params
+
+        self.local_costmap_client.call_async(request)
+        self.global_costmap_client.call_async(request)
+        
+    def set_cost_scaling_factor(self, value):
+    
+        params = [
+            self.make_double_param(
+                'inflation_layer.cost_scaling_factor',
+                value
+            )
+        ]
+
+        request = SetParameters.Request()
+        request.parameters = params
+
+        self.local_costmap_client.call_async(request)
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = AdaptiveController()
+    rclpy.spin(node)
+    node.destroy_node()
+    rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

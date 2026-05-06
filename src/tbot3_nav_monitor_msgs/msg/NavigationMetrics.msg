@@ -1,0 +1,23 @@
+float32 total_distance
+float32 current_x
+float32 current_y
+int32 goal_id
+float32 goal_x
+float32 goal_y
+float32 commanded_speed
+float32 actual_speed
+float32 speed_error
+float32 closest_obstacle_distance
+float32 battery_consumption
+int32 stuck_count
+float32 navigation_accuracy
+float32 obstacle_avoidance_efficiency
+float32 optimal_path_length
+float32 path_execution_time
+bool goal_reached
+
+float32 mean_obstacle_distance
+float32 obstacle_density
+float32 goal_progress_rate
+float32 environment_complexity
+int32 navigation_status
