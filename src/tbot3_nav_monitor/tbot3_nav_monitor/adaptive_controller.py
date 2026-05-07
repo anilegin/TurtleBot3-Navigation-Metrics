@@ -6,6 +6,12 @@ from rcl_interfaces.msg import ParameterValue
 from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import SetParameters
 
+from rclpy.action import ActionClient
+from nav2_msgs.action import NavigateToPose
+from tf2_ros import Buffer, TransformListener
+from tf2_ros import TransformException
+import math
+
 from nav2_msgs.srv import ClearEntireCostmap
 
 from tbot3_nav_monitor_msgs.msg import NavigationMetrics
@@ -152,6 +158,52 @@ class AdaptiveController(Node):
             'recovery_cost_scaling_factor',
             0.25
         ).value
+        
+        ## wall head turning problem
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        self.nav_to_pose_client = ActionClient(
+            self,
+            NavigateToPose,
+            'navigate_to_pose'
+        )
+
+        self.original_goal = None
+        self.active_goal_id = -1
+        self.escape_goal_active = False
+
+        self.wall_escape_forward_distance = self.declare_parameter(
+            'wall_escape_forward_distance',
+            0.45
+        ).value
+
+        self.wall_escape_lateral_offset = self.declare_parameter(
+            'wall_escape_lateral_offset',
+            0.25
+        ).value
+
+        self.wall_escape_close_threshold = self.declare_parameter(
+            'wall_escape_close_threshold',
+            0.45
+        ).value
+
+        self.wall_escape_progress_threshold = self.declare_parameter(
+            'wall_escape_progress_threshold',
+            0.002
+        ).value
+        
+        self.wall_escape_clear_threshold = self.declare_parameter(
+            'wall_escape_clear_threshold',
+            0.70
+        ).value
+
+        self.wall_escape_min_interval = self.declare_parameter(
+            'wall_escape_min_interval',
+            6.0
+        ).value
+
+        self.last_wall_escape_time = 0.0
 
         self.escape_mode_enabled = False
 
@@ -201,8 +253,8 @@ class AdaptiveController(Node):
         self.update_goal_tolerance(msg)
         self.update_narrow_passage_mode(msg)
 
-        if self.narrow_passage_enabled or self.escape_mode_enabled:
-            return
+        # if self.narrow_passage_enabled or self.escape_mode_enabled:
+        #     return
 
         if msg.stuck_count >= self.stuck_threshold and not self.velocity_reduced:
             self.set_max_velocity(self.reduced_max_velocity)
@@ -274,9 +326,6 @@ class AdaptiveController(Node):
             if robot hits obstacles often we increase the radius to 60cm from 30cm
             to avoid getting too close to obstacles.
         """
-        # this helps us to avoid getting stucked in narrow passages 
-        if self.narrow_passage_enabled:
-            return
     
         poor_efficiency = (
             msg.obstacle_avoidance_efficiency > 1.8
@@ -331,9 +380,7 @@ class AdaptiveController(Node):
         which also makes the planner more conservative in its path selection.
         
         """
-        if self.narrow_passage_enabled:
-            return
-
+        
         complex_environment = (
             msg.obstacle_density > 0.35 or
             msg.environment_complexity > 0.8 or
@@ -382,19 +429,13 @@ class AdaptiveController(Node):
             f"front={msg.front_clearance:.2f}, "
             f"corridor={msg.corridor_score:.1f}, "
             f"progress={progress:.4f}, "
-            f"counter={self.narrow_passage_counter}, "
             f"stuck_counter={self.narrow_stuck_counter}"
         )
         
-        narrow_passage = (
+        narrow_stuck = (
             msg.corridor_score > 0.5 and
             progress < 0.002 and
             not msg.goal_reached
-        )
-
-        narrow_stuck = (
-            narrow_passage and
-            progress < 0.002
         )
 
         if narrow_stuck:
@@ -402,46 +443,14 @@ class AdaptiveController(Node):
         else:
             self.narrow_stuck_counter = 0
             
-        if self.narrow_stuck_counter >= self.narrow_stuck_threshold:
-            self.apply_narrow_recovery()
+        self.update_wall_escape_goal(msg, progress)
+
+        if self.escape_goal_active:
             return
 
-        if narrow_passage:
-            self.narrow_passage_counter += 1
-        else:
-            self.narrow_passage_counter = 0
-
+        if self.narrow_stuck_counter >= self.narrow_stuck_threshold:
+            self.apply_narrow_recovery()
         
-        if self.narrow_passage_counter >= self.narrow_passage_threshold and not self.narrow_passage_enabled:
-            self.set_max_velocity(self.narrow_passage_velocity)
-            self.set_inflation_radius(self.narrow_passage_inflation_radius)
-            self.set_cost_scaling_factor(self.narrow_passage_cost_scaling_factor)
-            
-            self.set_controller_parameter('FollowPath.max_vel_theta', self.narrow_max_theta_velocity)
-
-            self.narrow_passage_enabled = True
-            self.escape_mode_enabled = False
-            self.velocity_reduced = False
-            self.conservative_mode_enabled = False
-            self.complex_environment_enabled = False
-
-            self.get_logger().warn("Narrow Passage Mode Enbaled")
-
-        elif self.narrow_passage_counter == 0 and (self.narrow_passage_enabled or self.escape_mode_enabled):
-            self.set_max_velocity(self.normal_max_velocity)
-            self.set_inflation_radius(self.normal_inflation_radius)
-            self.set_cost_scaling_factor(self.normal_cost_scaling_factor)
-            
-            self.set_controller_parameter('FollowPath.max_vel_x', self.normal_max_velocity)
-            self.set_controller_parameter('FollowPath.min_vel_x', 0.0)
-            self.set_controller_parameter('FollowPath.max_speed_xy', self.normal_max_velocity)
-            self.set_controller_parameter('FollowPath.max_vel_theta', 1.0)
-
-            self.narrow_passage_enabled = False
-            self.escape_mode_enabled = False
-            self.narrow_stuck_counter = 0
-            self.get_logger().info("Narrow passage cleared")
-
     def set_max_velocity(self, value):
         
         # these are responsible for planner's commanded velocities. 
@@ -544,9 +553,149 @@ class AdaptiveController(Node):
         if self.global_clear_client.wait_for_service(timeout_sec=0.1):
             self.global_clear_client.call_async(ClearEntireCostmap.Request())
 
-        self.escape_mode_enabled = True
+        self.escape_mode_enabled = False
         self.narrow_stuck_counter = 0
         self.narrow_passage_counter = 0
+        
+    def update_wall_escape_goal(self, msg, progress):
+        
+        if msg.goal_id < 0:
+            return
+
+        if msg.goal_reached:
+            return
+
+        if msg.navigation_accuracy < 0.20:
+            return
+            
+        if self.escape_goal_active:
+            both_sides_clear = (
+                msg.left_clearance > self.wall_escape_clear_threshold and
+                msg.right_clearance > self.wall_escape_clear_threshold
+            )
+
+            if both_sides_clear or msg.goal_reached:
+                self.send_original_goal()
+
+            return
+
+        current_time = self.get_clock().now().nanoseconds / 1e9
+
+        if current_time - self.last_wall_escape_time < self.wall_escape_min_interval:
+            return
+
+        no_progress = progress < self.wall_escape_progress_threshold
+
+        right_close = msg.right_clearance < self.wall_escape_close_threshold
+        left_close = msg.left_clearance < self.wall_escape_close_threshold
+
+        if not no_progress:
+            return
+
+        if right_close:
+            self.original_goal = (msg.goal_x, msg.goal_y)
+            self.send_wall_escape_goal('right')
+            self.last_wall_escape_time = current_time
+
+        elif left_close:
+            self.original_goal = (msg.goal_x, msg.goal_y)
+            self.send_wall_escape_goal('left')
+            self.last_wall_escape_time = current_time
+
+
+    def send_wall_escape_goal(self, side):
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'map',
+                'base_link',
+                rclpy.time.Time()
+            )
+
+        except TransformException:
+            self.get_logger().warn('Could not get robot transform for wall escape.')
+            return
+
+        x = transform.transform.translation.x
+        y = transform.transform.translation.y
+
+        q = transform.transform.rotation
+
+        siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
+        cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+
+        forward_x = math.cos(yaw)
+        forward_y = math.sin(yaw)
+
+        left_x = -math.sin(yaw)
+        left_y = math.cos(yaw)
+
+        if side == 'right':
+            lateral = self.wall_escape_lateral_offset
+        else:
+            lateral = -self.wall_escape_lateral_offset
+
+        target_x = (
+            x +
+            self.wall_escape_forward_distance * forward_x +
+            lateral * left_x
+        )
+
+        target_y = (
+            y +
+            self.wall_escape_forward_distance * forward_y +
+            lateral * left_y
+        )
+
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = 'map'
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+
+        goal_msg.pose.pose.position.x = target_x
+        goal_msg.pose.pose.position.y = target_y
+        goal_msg.pose.pose.orientation.w = 1.0
+
+        if not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().warn('NavigateToPose action server not available.')
+            return
+
+        self.nav_to_pose_client.send_goal_async(goal_msg)
+
+        self.escape_goal_active = True
+
+        self.get_logger().warn(
+            f'Wall escape goal sent. side={side}, x={target_x:.2f}, y={target_y:.2f}'
+        )
+
+
+    def send_original_goal(self):
+
+        if self.original_goal is None:
+            self.escape_goal_active = False
+            return
+
+        goal_x, goal_y = self.original_goal
+
+        goal_msg = NavigateToPose.Goal()
+        goal_msg.pose.header.frame_id = 'map'
+        goal_msg.pose.header.stamp = self.get_clock().now().to_msg()
+
+        goal_msg.pose.pose.position.x = goal_x
+        goal_msg.pose.pose.position.y = goal_y
+        goal_msg.pose.pose.orientation.w = 1.0
+
+        if not self.nav_to_pose_client.wait_for_server(timeout_sec=1.0):
+            self.get_logger().warn('NavigateToPose action server not available.')
+            return
+
+        self.nav_to_pose_client.send_goal_async(goal_msg)
+
+        self.escape_goal_active = False
+        self.original_goal = None
+        self.narrow_stuck_counter = 0
+
+        self.get_logger().info('Original goal restored after wall escape.')
 
 def main(args=None):
     rclpy.init(args=args)

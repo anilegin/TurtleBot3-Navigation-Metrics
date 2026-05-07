@@ -3,32 +3,35 @@ adaptive_controller:
     controller_node: "/controller_server"
 
     normal_max_velocity: 0.26
-    reduced_max_velocity: 0.18
-    stuck_threshold: 3
+    reduced_max_velocity: 0.20
+    stuck_threshold: 4
 
     normal_goal_tolerance: 0.15
-    relaxed_goal_tolerance: 0.30
-    goal_struggle_threshold: 8
+    relaxed_goal_tolerance: 0.25
+    goal_struggle_threshold: 10
 
     normal_inflation_radius: 0.30
-    conservative_inflation_radius: 0.40
-    bad_efficiency_threshold: 5
+    conservative_inflation_radius: 0.35
+    bad_efficiency_threshold: 8
 
     normal_cost_scaling_factor: 3.0
-    complex_cost_scaling_factor: 5.0
-    complex_environment_threshold: 5
+    complex_cost_scaling_factor: 3.5
+    complex_environment_threshold: 8
 
-    # move through narrow passages
-    narrow_passage_inflation_radius: 0.30
-    narrow_passage_cost_scaling_factor: 2.5
-    narrow_passage_velocity: 0.20
+    # only used for detecting narrow-stuck, not for slowing normal navigation
     narrow_passage_threshold: 3
-    narrow_max_theta_velocity: 0.60
+    narrow_stuck_threshold: 10
 
-    # recovery if robot stops progressing in narrow passage
-    narrow_stuck_threshold: 8
-    recovery_max_velocity: 0.14
+    # recovery close to native values
+    recovery_max_velocity: 0.20
     recovery_min_velocity: 0.00
-    recovery_max_theta_velocity: 0.45
+    recovery_max_theta_velocity: 0.80
     recovery_inflation_radius: 0.30
-    recovery_cost_scaling_factor: 2.0
+    recovery_cost_scaling_factor: 3.0
+
+    wall_escape_forward_distance: 0.45
+    wall_escape_lateral_offset: 0.25
+    wall_escape_close_threshold: 0.45
+    wall_escape_clear_threshold: 0.70
+    wall_escape_progress_threshold: 0.002
+    wall_escape_min_interval: 6.0
