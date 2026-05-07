@@ -43,6 +43,10 @@ class CsvLogger(Node):
             'stuck_count',
             'navigation_accuracy(distance2goal)',
             'obstacle_avoidance_efficiency',
+            'left_clearance',
+            'right_clearance',
+            'front_clearance',
+            'corridor_score',
             'optimal_path_length',
             'goal_reached',
             'path_execution_time'
@@ -83,6 +87,10 @@ class CsvLogger(Node):
             msg.stuck_count,
             msg.navigation_accuracy,
             msg.obstacle_avoidance_efficiency,
+            msg.left_clearance,
+            msg.right_clearance,
+            msg.front_clearance,
+            msg.corridor_score,
             msg.optimal_path_length,
             msg.goal_reached,
             msg.path_execution_time

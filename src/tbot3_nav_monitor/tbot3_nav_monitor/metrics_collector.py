@@ -120,6 +120,12 @@ class MetricsCollector(Node):
         self.start_time = None
         self.path_execution_time = 0.0
         
+        ## narrow passage detection
+        self.left_clearance = float("inf")
+        self.right_clearance = float("inf")
+        self.front_clearance = float("inf")
+        self.corridor_score = 0.0
+        
         ## publisher for navigation metrics
         self.metrics_publisher = self.create_publisher(
             NavigationMetrics,
@@ -269,6 +275,38 @@ class MetricsCollector(Node):
             self.obstacle_density *
             (1.0 / max(self.mean_obstacle_distance, 0.001))
         )
+        
+        ## narrow passages
+        n = len(msg.ranges)
+
+        def clean(vals):
+            return [r for r in vals if not math.isinf(r) and not math.isnan(r)]
+
+        front = clean(msg.ranges[0:20] + msg.ranges[-20:])
+        left = clean(msg.ranges[60:120])
+        right = clean(msg.ranges[-120:-60])
+
+        self.front_clearance = min(front) if front else float("inf")
+        self.left_clearance = min(left) if left else float("inf")
+        self.right_clearance = min(right) if right else float("inf")
+
+        # side_close = self.left_clearance < 0.75 and self.right_clearance < 0.75
+        # front_open = self.front_clearance > 0.35
+
+        # self.corridor_score = 1.0 if side_close and front_open else 0.0
+        
+        one_side_very_close = (
+            self.left_clearance < 0.45 or
+            self.right_clearance < 0.45
+        )
+
+        both_sides_close = (
+            self.left_clearance < 0.90 and
+            self.right_clearance < 0.90
+        )
+
+        self.corridor_score = 1.0 if one_side_very_close or both_sides_close else 0.0
+        
 
         self.get_logger().info(
             f"Closest Obstacle Distance: "
@@ -388,6 +426,11 @@ class MetricsCollector(Node):
         msg.optimal_path_length = float(self.optimal_path_length)
         msg.path_execution_time = float(self.path_execution_time) if self.path_execution_time is not None else 0.0  
         msg.goal_reached = bool(self.navigation_finished)
+        
+        msg.left_clearance = float(self.left_clearance)
+        msg.right_clearance = float(self.right_clearance)
+        msg.front_clearance = float(self.front_clearance)
+        msg.corridor_score = float(self.corridor_score)
 
         self.metrics_publisher.publish(msg)
 

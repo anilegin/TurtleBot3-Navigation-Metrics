@@ -21,3 +21,8 @@ float32 obstacle_density
 float32 goal_progress_rate
 float32 environment_complexity
 int32 navigation_status
+
+float32 left_clearance
+float32 right_clearance
+float32 front_clearance
+float32 corridor_score

@@ -6,6 +6,8 @@ from rcl_interfaces.msg import ParameterValue
 from rcl_interfaces.msg import ParameterType
 from rcl_interfaces.srv import SetParameters
 
+from nav2_msgs.srv import ClearEntireCostmap
+
 from tbot3_nav_monitor_msgs.msg import NavigationMetrics
 
 
@@ -93,23 +95,75 @@ class AdaptiveController(Node):
         ## i add this since current one lacks moving through narrow passages
         self.narrow_passage_inflation_radius = self.declare_parameter(
             'narrow_passage_inflation_radius',
-            0.18
+            0.35
         ).value
+
         self.narrow_passage_cost_scaling_factor = self.declare_parameter(
             'narrow_passage_cost_scaling_factor',
-            2.0
+            0.5
         ).value
+
         self.narrow_passage_velocity = self.declare_parameter(
             'narrow_passage_velocity',
-            0.06
+            0.05
         ).value
+
         self.narrow_passage_threshold = self.declare_parameter(
             'narrow_passage_threshold',
-            5
+            2
         ).value
 
         self.narrow_passage_counter = 0
         self.narrow_passage_enabled = False
+        
+        self.last_distance_to_goal = None
+        self.narrow_stuck_counter = 0
+        self.narrow_stuck_threshold = self.declare_parameter(
+            'narrow_stuck_threshold',
+            8
+        ).value
+        
+        self.recovery_max_velocity = self.declare_parameter(
+            'recovery_max_velocity',
+            0.035
+        ).value
+
+        self.recovery_min_velocity = self.declare_parameter(
+            'recovery_min_velocity',
+            0.01
+        ).value
+
+        self.narrow_max_theta_velocity = self.declare_parameter(
+            'narrow_max_theta_velocity',
+            0.10
+        ).value
+
+        self.recovery_max_theta_velocity = self.declare_parameter(
+            'recovery_max_theta_velocity',
+            0.08
+        ).value
+
+        self.recovery_inflation_radius = self.declare_parameter(
+            'recovery_inflation_radius',
+            0.25
+        ).value
+
+        self.recovery_cost_scaling_factor = self.declare_parameter(
+            'recovery_cost_scaling_factor',
+            0.25
+        ).value
+
+        self.escape_mode_enabled = False
+
+        self.local_clear_client = self.create_client(
+            ClearEntireCostmap,
+            '/local_costmap/clear_entirely_local_costmap'
+        )
+
+        self.global_clear_client = self.create_client(
+            ClearEntireCostmap,
+            '/global_costmap/clear_entirely_global_costmap'
+        )
 
         # param update 
         self.param_client = self.create_client(
@@ -143,6 +197,12 @@ class AdaptiveController(Node):
         if not self.param_client.wait_for_service(timeout_sec=0.1):
             self.get_logger().warn('Controller parameter service not available yet.')
             return
+        
+        self.update_goal_tolerance(msg)
+        self.update_narrow_passage_mode(msg)
+
+        if self.narrow_passage_enabled or self.escape_mode_enabled:
+            return
 
         if msg.stuck_count >= self.stuck_threshold and not self.velocity_reduced:
             self.set_max_velocity(self.reduced_max_velocity)
@@ -158,8 +218,6 @@ class AdaptiveController(Node):
                 f'Stuck count normal. Restoring max velocity to {self.normal_max_velocity}'
             )
         
-        self.update_goal_tolerance(msg)
-        self.update_narrow_passage_mode(msg)
         self.update_conservative_planning(msg)
         self.update_environment_complexity(msg)
         
@@ -241,7 +299,7 @@ class AdaptiveController(Node):
             self.conservative_mode_enabled = True
 
             self.get_logger().warn(
-                f'Poor obstacle avoidance efficiency detected. Enabling conservative planning mode.'
+                f'bad obstacle avoidance efficiency detected. Enabling conservative planning mode.'
             )
 
         elif (
@@ -295,9 +353,7 @@ class AdaptiveController(Node):
             self.complex_environment_enabled = True
 
             self.get_logger().warn(
-                f'Complex environment detected. '
-                f'Increasing local costmap cost scaling factor to '
-                f'{self.complex_cost_scaling_factor}'
+                f'Complex environment detected. Increasing local costmap cost scaling factor to {self.complex_cost_scaling_factor}'
             )
 
         elif (
@@ -308,54 +364,83 @@ class AdaptiveController(Node):
             self.complex_environment_enabled = False
 
             self.get_logger().info(
-                f'Environment complexity normalized. '
-                f'Restoring local costmap cost scaling factor to '
-                f'{self.normal_cost_scaling_factor}'
+                f'Environment complexity normalized to: {self.normal_cost_scaling_factor}'
             )
             
     def update_narrow_passage_mode(self, msg):
-    
+        
+        if self.last_distance_to_goal is None:
+            progress = 999.0
+        else:
+            progress = self.last_distance_to_goal - msg.navigation_accuracy
+
+        self.last_distance_to_goal = msg.navigation_accuracy
+
+        self.get_logger().info(
+            f"narrow debug | left={msg.left_clearance:.2f}, "
+            f"right={msg.right_clearance:.2f}, "
+            f"front={msg.front_clearance:.2f}, "
+            f"corridor={msg.corridor_score:.1f}, "
+            f"progress={progress:.4f}, "
+            f"counter={self.narrow_passage_counter}, "
+            f"stuck_counter={self.narrow_stuck_counter}"
+        )
+        
         narrow_passage = (
-            msg.obstacle_density > 0.35 and
-            msg.mean_obstacle_distance < 1.2 and
-            abs(msg.goal_progress_rate) < 0.01 and
+            msg.corridor_score > 0.5 and
+            progress < 0.002 and
             not msg.goal_reached
         )
+
+        narrow_stuck = (
+            narrow_passage and
+            progress < 0.002
+        )
+
+        if narrow_stuck:
+            self.narrow_stuck_counter += 1
+        else:
+            self.narrow_stuck_counter = 0
+            
+        if self.narrow_stuck_counter >= self.narrow_stuck_threshold:
+            self.apply_narrow_recovery()
+            return
 
         if narrow_passage:
             self.narrow_passage_counter += 1
         else:
             self.narrow_passage_counter = 0
 
-        if (
-            self.narrow_passage_counter >= self.narrow_passage_threshold
-            and not self.narrow_passage_enabled
-        ):
+        
+        if self.narrow_passage_counter >= self.narrow_passage_threshold and not self.narrow_passage_enabled:
             self.set_max_velocity(self.narrow_passage_velocity)
             self.set_inflation_radius(self.narrow_passage_inflation_radius)
             self.set_cost_scaling_factor(self.narrow_passage_cost_scaling_factor)
+            
+            self.set_controller_parameter('FollowPath.max_vel_theta', self.narrow_max_theta_velocity)
 
             self.narrow_passage_enabled = True
+            self.escape_mode_enabled = False
+            self.velocity_reduced = False
             self.conservative_mode_enabled = False
             self.complex_environment_enabled = False
 
-            self.get_logger().warn(
-                f'Narrow passage detected. Lowering speed, inflation radius, and cost scaling.'
-            )
+            self.get_logger().warn("Narrow Passage Mode Enbaled")
 
-        elif (
-            self.narrow_passage_counter == 0
-            and self.narrow_passage_enabled
-        ):
+        elif self.narrow_passage_counter == 0 and (self.narrow_passage_enabled or self.escape_mode_enabled):
             self.set_max_velocity(self.normal_max_velocity)
             self.set_inflation_radius(self.normal_inflation_radius)
             self.set_cost_scaling_factor(self.normal_cost_scaling_factor)
+            
+            self.set_controller_parameter('FollowPath.max_vel_x', self.normal_max_velocity)
+            self.set_controller_parameter('FollowPath.min_vel_x', 0.0)
+            self.set_controller_parameter('FollowPath.max_speed_xy', self.normal_max_velocity)
+            self.set_controller_parameter('FollowPath.max_vel_theta', 1.0)
 
             self.narrow_passage_enabled = False
-
-            self.get_logger().info(
-                f'Narrow passage cleared. Restoring normal parameters.'
-            )
+            self.escape_mode_enabled = False
+            self.narrow_stuck_counter = 0
+            self.get_logger().info("Narrow passage cleared")
 
     def set_max_velocity(self, value):
         
@@ -429,6 +514,39 @@ class AdaptiveController(Node):
         request.parameters = params
 
         self.local_costmap_client.call_async(request)
+        
+    def set_controller_parameter(self, name, value):
+        
+        params = [
+            self.make_double_param(name, value)
+        ]
+
+        request = SetParameters.Request()
+        request.parameters = params
+
+        self.param_client.call_async(request)
+        
+    def apply_narrow_recovery(self):
+        
+        self.get_logger().warn("Narrow passage stuck. Applying slow recovery mode.")
+
+        self.set_controller_parameter('FollowPath.max_vel_theta', self.recovery_max_theta_velocity)
+        self.set_controller_parameter('FollowPath.min_vel_x', self.recovery_min_velocity)
+        self.set_controller_parameter('FollowPath.max_vel_x', self.recovery_max_velocity)
+        self.set_controller_parameter('FollowPath.max_speed_xy', self.recovery_max_velocity)
+
+        self.set_inflation_radius(self.recovery_inflation_radius)
+        self.set_cost_scaling_factor(self.recovery_cost_scaling_factor)
+
+        if self.local_clear_client.wait_for_service(timeout_sec=0.1):
+            self.local_clear_client.call_async(ClearEntireCostmap.Request())
+
+        if self.global_clear_client.wait_for_service(timeout_sec=0.1):
+            self.global_clear_client.call_async(ClearEntireCostmap.Request())
+
+        self.escape_mode_enabled = True
+        self.narrow_stuck_counter = 0
+        self.narrow_passage_counter = 0
 
 def main(args=None):
     rclpy.init(args=args)
