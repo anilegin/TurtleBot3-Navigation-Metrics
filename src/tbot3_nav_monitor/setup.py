@@ -33,6 +33,7 @@ setup(
             'csv_logger = tbot3_nav_monitor.csv_logger:main',
             'adaptive_controller = tbot3_nav_monitor.adaptive_controller:main',
             'metrics_visualizer = tbot3_nav_monitor.metrics_visualizer:main',
+            'batch_goal_sender = tbot3_nav_monitor.batch_goal_sender:main',
         ],
     },
 )

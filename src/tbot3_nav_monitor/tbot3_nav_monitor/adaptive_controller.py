@@ -443,7 +443,8 @@ class AdaptiveController(Node):
         else:
             self.narrow_stuck_counter = 0
             
-        self.update_wall_escape_goal(msg, progress)
+        # for simulation i will disable it since it can mess up goal ids
+        #self.update_wall_escape_goal(msg, progress)
 
         if self.escape_goal_active:
             return

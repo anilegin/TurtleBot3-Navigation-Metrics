@@ -80,6 +80,7 @@ class MetricsCollector(Node):
         self.battery_rate_per_meter = 0.05  # 5% battery per meter as an example
         
         ## stuck behavior
+        self.is_stuck = False
         self.stuck_count = 0
         self.stuck_counter = 0
         self.stuck_counter_threshold = 3 # if robot is not moving 3 cons times then defined stuck
@@ -323,11 +324,20 @@ class MetricsCollector(Node):
         else:
             self.stuck_counter = 0
 
-        if self.stuck_counter == self.stuck_counter_threshold:
-            self.stuck_count += 1
+        if self.stuck_counter >= self.stuck_counter_threshold:
+    
+            if not self.is_stuck:
+                self.stuck_count += 1
+
+            self.is_stuck = True
+            
             self.get_logger().warn(
                 f"Possible stuck event detected. Count: {self.stuck_count}"
             )
+
+        else:
+            self.is_stuck = False
+
             
     def update_path_execution_time(self):
     
@@ -379,6 +389,9 @@ class MetricsCollector(Node):
         # reset navigation session
         self.navigation_finished = False
         self.navigation_started = False
+        # reset stuck metrics for the new goal
+        self.stuck_count = 0
+        self.stuck_counter = 0
 
         self.total_distance = 0.0
         self.path_execution_time = 0.0
