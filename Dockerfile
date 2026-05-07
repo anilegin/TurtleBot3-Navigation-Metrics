@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y \
     ros-humble-gazebo-ros \
     ros-humble-gazebo-ros-pkgs \
     ros-humble-gazebo-plugins \
+    ros-humble-teleop-twist-keyboard \
     python3-colcon-common-extensions \
     python3-pip \
     mesa-utils \

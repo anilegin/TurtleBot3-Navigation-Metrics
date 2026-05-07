@@ -1,0 +1,25 @@
+adaptive_controller:
+  ros__parameters:
+    controller_node: "/controller_server"
+
+    normal_max_velocity: 0.26 # default vel for tbot3 conf 
+    reduced_max_velocity: 0.15
+    stuck_threshold: 3
+
+    normal_goal_tolerance: 0.15 #default for tbot3
+    relaxed_goal_tolerance: 0.30
+    goal_struggle_threshold: 8
+
+    normal_inflation_radius: 0.30 #default for tbot3
+    conservative_inflation_radius: 0.40
+    bad_efficiency_threshold: 5
+
+    normal_cost_scaling_factor: 3.0 #default for tbot3
+    complex_cost_scaling_factor: 5.0
+    complex_environment_threshold: 5
+
+    # move through narrow passages
+    narrow_passage_inflation_radius: 0.18
+    narrow_passage_cost_scaling_factor: 2.0
+    narrow_passage_velocity: 0.15
+    narrow_passage_threshold: 5

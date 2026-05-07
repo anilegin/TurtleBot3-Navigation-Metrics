@@ -16,40 +16,100 @@ class AdaptiveController(Node):
         
         self.get_logger().info('Adaptive Controller Started')
 
-        self.controller_node = '/controller_server'
+        self.controller_node = self.declare_parameter(
+            'controller_node',
+            '/controller_server'
+        ).value
         
         ## adapting vel if robot often stucks
-        self.normal_max_velocity = 0.26 # default vel for tbot3 conf 
-        self.reduced_max_velocity = 0.10
+        self.normal_max_velocity = self.declare_parameter(
+            'normal_max_velocity',
+            0.26
+        ).value
+        self.reduced_max_velocity = self.declare_parameter(
+            'reduced_max_velocity',
+            0.10
+        ).value
 
-        self.stuck_threshold = 3
+        self.stuck_threshold = self.declare_parameter(
+            'stuck_threshold',
+            3
+        ).value
         self.velocity_reduced = False
         
         # goal tolerance when nav accuracy is poor
-        self.normal_goal_tolerance = 0.15 #default for tbot3
-        self.relaxed_goal_tolerance = 0.30
+        self.normal_goal_tolerance = self.declare_parameter(
+            'normal_goal_tolerance',
+            0.15
+        ).value
+        self.relaxed_goal_tolerance = self.declare_parameter(
+            'relaxed_goal_tolerance',
+            0.30
+        ).value
 
+        self.goal_struggle_threshold = self.declare_parameter(
+            'goal_struggle_threshold',
+            8
+        ).value
         self.goal_struggle_counter = 0
-        self.goal_struggle_threshold = 8
         self.goal_tolerance_relaxed = False
         
         ## path planner adjustment
-        self.normal_inflation_radius = 0.30 #default for tbot3
-        self.conservative_inflation_radius = 0.60
+        self.normal_inflation_radius = self.declare_parameter(
+            'normal_inflation_radius',
+            0.30
+        ).value
+        self.conservative_inflation_radius = self.declare_parameter(
+            'conservative_inflation_radius',
+            0.60
+        ).value
 
+        self.bad_efficiency_threshold = self.declare_parameter(
+            'bad_efficiency_threshold',
+            5
+        ).value
         self.bad_efficiency_counter = 0
-        self.bad_efficiency_threshold = 5
 
         self.conservative_mode_enabled = False
         
         ## local costmap update based on env compelxity
-        self.normal_cost_scaling_factor = 3.0
-        self.complex_cost_scaling_factor = 10.0
+        self.normal_cost_scaling_factor = self.declare_parameter(
+            'normal_cost_scaling_factor',
+            3.0
+        ).value
+        self.complex_cost_scaling_factor = self.declare_parameter(
+            'complex_cost_scaling_factor',
+            10.0
+        ).value
 
+        self.complex_environment_threshold = self.declare_parameter(
+            'complex_environment_threshold',
+            5
+        ).value
         self.complex_environment_counter = 0
-        self.complex_environment_threshold = 5
 
         self.complex_environment_enabled = False
+        
+        ## i add this since current one lacks moving through narrow passages
+        self.narrow_passage_inflation_radius = self.declare_parameter(
+            'narrow_passage_inflation_radius',
+            0.18
+        ).value
+        self.narrow_passage_cost_scaling_factor = self.declare_parameter(
+            'narrow_passage_cost_scaling_factor',
+            2.0
+        ).value
+        self.narrow_passage_velocity = self.declare_parameter(
+            'narrow_passage_velocity',
+            0.06
+        ).value
+        self.narrow_passage_threshold = self.declare_parameter(
+            'narrow_passage_threshold',
+            5
+        ).value
+
+        self.narrow_passage_counter = 0
+        self.narrow_passage_enabled = False
 
         # param update 
         self.param_client = self.create_client(
@@ -99,6 +159,7 @@ class AdaptiveController(Node):
             )
         
         self.update_goal_tolerance(msg)
+        self.update_narrow_passage_mode(msg)
         self.update_conservative_planning(msg)
         self.update_environment_complexity(msg)
         
@@ -155,6 +216,9 @@ class AdaptiveController(Node):
             if robot hits obstacles often we increase the radius to 60cm from 30cm
             to avoid getting too close to obstacles.
         """
+        # this helps us to avoid getting stucked in narrow passages 
+        if self.narrow_passage_enabled:
+            return
     
         poor_efficiency = (
             msg.obstacle_avoidance_efficiency > 1.8
@@ -177,8 +241,7 @@ class AdaptiveController(Node):
             self.conservative_mode_enabled = True
 
             self.get_logger().warn(
-                f'Poor obstacle avoidance efficiency detected. '
-                f'Enabling conservative planning mode.'
+                f'Poor obstacle avoidance efficiency detected. Enabling conservative planning mode.'
             )
 
         elif (
@@ -210,6 +273,8 @@ class AdaptiveController(Node):
         which also makes the planner more conservative in its path selection.
         
         """
+        if self.narrow_passage_enabled:
+            return
 
         complex_environment = (
             msg.obstacle_density > 0.35 or
@@ -246,6 +311,50 @@ class AdaptiveController(Node):
                 f'Environment complexity normalized. '
                 f'Restoring local costmap cost scaling factor to '
                 f'{self.normal_cost_scaling_factor}'
+            )
+            
+    def update_narrow_passage_mode(self, msg):
+    
+        narrow_passage = (
+            msg.obstacle_density > 0.35 and
+            msg.mean_obstacle_distance < 1.2 and
+            abs(msg.goal_progress_rate) < 0.01 and
+            not msg.goal_reached
+        )
+
+        if narrow_passage:
+            self.narrow_passage_counter += 1
+        else:
+            self.narrow_passage_counter = 0
+
+        if (
+            self.narrow_passage_counter >= self.narrow_passage_threshold
+            and not self.narrow_passage_enabled
+        ):
+            self.set_max_velocity(self.narrow_passage_velocity)
+            self.set_inflation_radius(self.narrow_passage_inflation_radius)
+            self.set_cost_scaling_factor(self.narrow_passage_cost_scaling_factor)
+
+            self.narrow_passage_enabled = True
+            self.conservative_mode_enabled = False
+            self.complex_environment_enabled = False
+
+            self.get_logger().warn(
+                f'Narrow passage detected. Lowering speed, inflation radius, and cost scaling.'
+            )
+
+        elif (
+            self.narrow_passage_counter == 0
+            and self.narrow_passage_enabled
+        ):
+            self.set_max_velocity(self.normal_max_velocity)
+            self.set_inflation_radius(self.normal_inflation_radius)
+            self.set_cost_scaling_factor(self.normal_cost_scaling_factor)
+
+            self.narrow_passage_enabled = False
+
+            self.get_logger().info(
+                f'Narrow passage cleared. Restoring normal parameters.'
             )
 
     def set_max_velocity(self, value):

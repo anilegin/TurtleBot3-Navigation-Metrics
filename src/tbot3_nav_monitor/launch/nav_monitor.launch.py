@@ -1,6 +1,9 @@
 from launch import LaunchDescription
 from launch_ros.actions import Node
 
+from launch.substitutions import PathJoinSubstitution
+from launch_ros.substitutions import FindPackageShare
+
 
 def generate_launch_description():
 
@@ -18,11 +21,18 @@ def generate_launch_description():
         output='screen'
     )
     
+    adaptive_controller_config = PathJoinSubstitution([
+        FindPackageShare('tbot3_nav_monitor'),
+        'config',
+        'adaptive_controller.yaml'
+    ])
+
     adaptive_controller_node = Node(
         package='tbot3_nav_monitor',
         executable='adaptive_controller',
         name='adaptive_controller',
-        output='screen'
+        output='screen',
+        parameters=[adaptive_controller_config]
     )
     
     metrics_visualizer_node = Node(
