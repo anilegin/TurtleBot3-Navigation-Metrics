@@ -4,7 +4,7 @@ from rclpy.node import Node
 from geometry_msgs.msg import Point
 from visualization_msgs.msg import Marker, MarkerArray
 
-from tbot3_nav_monitor_msgs.msg import NavigationMetrics
+from tbot3_nav_monitor_msgs.msg import NavigationMetrics, MLNavigationPrediction
 
 
 class MetricsVisualizer(Node):
@@ -24,6 +24,17 @@ class MetricsVisualizer(Node):
             NavigationMetrics,
             '/navigation_metrics',
             self.metrics_callback,
+            10
+        )
+        
+        self.latest_risk_probability = None
+        self.latest_predicted_risky_navigation = None
+        self.latest_prediction_goal_id = None
+
+        self.create_subscription(
+            MLNavigationPrediction,
+            '/ml_navigation_prediction',
+            self.prediction_callback,
             10
         )
 
@@ -52,6 +63,12 @@ class MetricsVisualizer(Node):
 
         if msg.navigation_status == 2:
             return 'STUCK'
+
+        if (
+            self.latest_predicted_risky_navigation is True
+            and self.latest_prediction_goal_id == msg.goal_id
+        ):
+            return 'ML HIGH RISK'
 
         if msg.corridor_score > 0.5:
             return 'NARROW PASSAGE'
@@ -85,6 +102,22 @@ class MetricsVisualizer(Node):
         marker.color.g = 1.0
         marker.color.b = 1.0
         marker.color.a = 1.0
+        
+        ml_text = ' '
+        if self.latest_risk_probability is None:
+                ml_text = (
+                'ML NAVIGATION RISK\n'
+                'Prediction: waiting for LSTM window\n'
+                'Risk probability: N/A\n'
+                'Predicted risky: N/A\n\n'
+            )
+        else:
+            ml_text = (
+                'ML NAVIGATION RISK\n'
+                f'Prediction goal ID: {self.latest_prediction_goal_id}\n'
+                f'Risk probability: {self.latest_risk_probability:.2f}\n'
+                f'Predicted risky: {self.latest_predicted_risky_navigation}\n\n'
+            )
 
         marker.text = (
             f'NAVIGATION STATUS\n'
@@ -92,7 +125,7 @@ class MetricsVisualizer(Node):
             f'Goal ID: {msg.goal_id}\n'
             f'Goal reached: {msg.goal_reached}\n'
             f'Execution time: {msg.path_execution_time:.1f} s\n\n'
-
+            f'{ml_text}'
             f'ROBOT MOTION\n'
             f'Position: x={msg.current_x:.2f}, y={msg.current_y:.2f}\n'
             f'Commanded speed: {msg.commanded_speed:.2f} m/s\n'
@@ -146,7 +179,12 @@ class MetricsVisualizer(Node):
         marker.scale.y = 0.25
         marker.scale.z = 0.25
 
-        if mode == 'STUCK':
+        if mode == 'ML HIGH RISK':
+            marker.color.r = 1.0
+            marker.color.g = 0.0
+            marker.color.b = 1.0
+
+        elif mode == 'STUCK':
             marker.color.r = 1.0
             marker.color.g = 0.0
             marker.color.b = 0.0
@@ -235,6 +273,11 @@ class MetricsVisualizer(Node):
         marker.color.a = 0.8
 
         return marker
+    
+    def prediction_callback(self, msg):
+        self.latest_risk_probability = msg.risk_probability
+        self.latest_predicted_risky_navigation = msg.predicted_risky_navigation
+        self.latest_prediction_goal_id = msg.goal_id
 
 
 def main(args=None):

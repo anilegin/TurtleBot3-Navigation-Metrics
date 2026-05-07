@@ -168,6 +168,11 @@ class AdaptiveController(Node):
             NavigateToPose,
             'navigate_to_pose'
         )
+        
+        self.use_wall_escape = self.declare_parameter(
+            'use_wall_escape',
+            True
+        ).value
 
         self.original_goal = None
         self.active_goal_id = -1
@@ -175,7 +180,7 @@ class AdaptiveController(Node):
 
         self.wall_escape_forward_distance = self.declare_parameter(
             'wall_escape_forward_distance',
-            0.45
+            0.30
         ).value
 
         self.wall_escape_lateral_offset = self.declare_parameter(
@@ -444,7 +449,8 @@ class AdaptiveController(Node):
             self.narrow_stuck_counter = 0
             
         # for simulation i will disable it since it can mess up goal ids
-        #self.update_wall_escape_goal(msg, progress)
+        if self.use_wall_escape:
+            self.update_wall_escape_goal(msg, progress)
 
         if self.escape_goal_active:
             return
@@ -559,25 +565,32 @@ class AdaptiveController(Node):
         self.narrow_passage_counter = 0
         
     def update_wall_escape_goal(self, msg, progress):
-        
+    
         if msg.goal_id < 0:
             return
 
-        if msg.goal_reached:
-            return
-
-        if msg.navigation_accuracy < 0.20:
-            return
-            
+        # IMPORTANT: handle escape goal first
         if self.escape_goal_active:
             both_sides_clear = (
                 msg.left_clearance > self.wall_escape_clear_threshold and
                 msg.right_clearance > self.wall_escape_clear_threshold
             )
 
-            if both_sides_clear or msg.goal_reached:
+            escape_goal_finished = msg.goal_reached
+
+            if both_sides_clear or escape_goal_finished:
+                self.get_logger().info(
+                    'Wall escape finished. Restoring original goal.'
+                )
                 self.send_original_goal()
 
+            return
+
+        # normal goal checks only after escape handling
+        if msg.goal_reached:
+            return
+
+        if msg.navigation_accuracy < 0.20:
             return
 
         current_time = self.get_clock().now().nanoseconds / 1e9
@@ -695,6 +708,7 @@ class AdaptiveController(Node):
         self.escape_goal_active = False
         self.original_goal = None
         self.narrow_stuck_counter = 0
+        self.last_distance_to_goal = None
 
         self.get_logger().info('Original goal restored after wall escape.')
 

@@ -14,13 +14,25 @@ if (!(Test-Path "maps")) {
 #     --network host \
 #     tbot3_humble
 
-docker run -it -d \
-  --name tbot3_container \
+# docker run -it -d \
+#   --name tb3_container \
+#   -p 5000:5000 \
+#   --privileged \
+#   -e DISPLAY=$DISPLAY \
+#   -e LIBGL_ALWAYS_SOFTWARE=1 \
+#   -e QT_X11_NO_MITSHM=1 \
+#   -v /tmp/.X11-unix:/tmp/.X11-unix \
+#   -v $(pwd):/root/tbot3_ws \
+#   --network host \
+#   tbot3_humble
+
+  docker run -it -d \
+  --name tb3_container \
+  -p 5000:5000 \
   --privileged \
   -e DISPLAY=$DISPLAY \
   -e LIBGL_ALWAYS_SOFTWARE=1 \
   -e QT_X11_NO_MITSHM=1 \
   -v /tmp/.X11-unix:/tmp/.X11-unix \
   -v $(pwd):/root/tbot3_ws \
-  --network host \
   tbot3_humble

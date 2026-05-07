@@ -29,9 +29,10 @@ adaptive_controller:
     recovery_inflation_radius: 0.30
     recovery_cost_scaling_factor: 3.0
 
-    wall_escape_forward_distance: 0.45
+    wall_escape_forward_distance: 0.30
     wall_escape_lateral_offset: 0.25
     wall_escape_close_threshold: 0.45
     wall_escape_clear_threshold: 0.70
     wall_escape_progress_threshold: 0.002
     wall_escape_min_interval: 6.0
+    use_wall_escape: True

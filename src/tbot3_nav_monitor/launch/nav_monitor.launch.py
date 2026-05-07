@@ -20,7 +20,7 @@ def generate_launch_description():
         name='csv_logger',
         output='screen'
     )
-    
+
     adaptive_controller_config = PathJoinSubstitution([
         FindPackageShare('tbot3_nav_monitor'),
         'config',
@@ -34,7 +34,14 @@ def generate_launch_description():
         output='screen',
         parameters=[adaptive_controller_config]
     )
-    
+
+    ml_predictor_node = Node(
+        package='tbot3_nav_monitor',
+        executable='ml_predictor',
+        name='ml_predictor',
+        output='screen'
+    )
+
     metrics_visualizer_node = Node(
         package='tbot3_nav_monitor',
         executable='metrics_visualizer',
@@ -46,5 +53,6 @@ def generate_launch_description():
         metrics_collector_node,
         csv_logger_node,
         adaptive_controller_node,
+        ml_predictor_node,
         metrics_visualizer_node
     ])

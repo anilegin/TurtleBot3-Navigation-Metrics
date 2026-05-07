@@ -20,10 +20,19 @@ RUN apt-get update && apt-get install -y \
     libgl1-mesa-glx \
     && rm -rf /var/lib/apt/lists/*
 
-# create workspace
+RUN python3 -m pip install --no-cache-dir \
+    "numpy==1.26.4" \
+    "scipy==1.10.1" \
+    "scikit-learn==1.3.2" \
+    "joblib==1.3.2" \
+    torch \
+    torchvision \
+    torchaudio \
+    flask 
+
 WORKDIR /root/tbot3_ws
 
-# auto source ROS2
 RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+RUN echo "if [ -f /root/tbot3_ws/install/setup.bash ]; then source /root/tbot3_ws/install/setup.bash; fi" >> ~/.bashrc
 
 CMD ["/bin/bash"]

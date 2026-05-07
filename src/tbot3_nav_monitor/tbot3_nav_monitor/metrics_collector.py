@@ -185,7 +185,7 @@ class MetricsCollector(Node):
             self.obstacle_avoidance_efficiency = 0.0
         
         # sample battery consumption based on distance traveled
-        self.battery_consumption = (
+        self.battery_consumption += (
             self.total_distance * self.battery_rate_per_meter
         )
         

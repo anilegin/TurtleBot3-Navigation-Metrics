@@ -34,6 +34,8 @@ setup(
             'adaptive_controller = tbot3_nav_monitor.adaptive_controller:main',
             'metrics_visualizer = tbot3_nav_monitor.metrics_visualizer:main',
             'batch_goal_sender = tbot3_nav_monitor.batch_goal_sender:main',
+            'ml_predictor = tbot3_nav_monitor.ml_predictor:main',
+            'web_dashboard = tbot3_nav_monitor.web_dashboard:main',
         ],
     },
 )
