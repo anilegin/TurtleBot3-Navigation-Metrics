@@ -43,6 +43,12 @@ You can check the config folder for detailed parameter descriptions.
 
 ---
 
+# Demo Video
+
+[![Watch the demo](https://img.youtube.com/vi/9YkNG-avMpo/maxresdefault.jpg)](https://youtu.be/9YkNG-avMpo)
+
+---
+
 # Implemented Nodes and Features
 
 ## Navigation Metrics Node
@@ -273,10 +279,6 @@ tbot3_nav_monitor/
 └── run_turtlebot.ps1
 ```
 ---
-
-# Demo
-
-Demo video and additional testing results will be added soon.
 
 # Troubleshooting
 

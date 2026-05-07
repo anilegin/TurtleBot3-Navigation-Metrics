@@ -39,7 +39,7 @@ def generate_launch_description():
     x_pose = LaunchConfiguration('x_pose', default='0.5')
     y_pose = LaunchConfiguration('y_pose', default='-4.5')
 
-    world = '/root/tbot3_ws/tbot3_nav_monitor/worlds/maze.world'
+    world = '/root/tbot3_ws/worlds/maze.world'
 
     gzserver_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
