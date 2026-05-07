@@ -569,7 +569,7 @@ class AdaptiveController(Node):
         if msg.goal_id < 0:
             return
 
-        # IMPORTANT: handle escape goal first
+        # handling escape goal first
         if self.escape_goal_active:
             both_sides_clear = (
                 msg.left_clearance > self.wall_escape_clear_threshold and
@@ -618,6 +618,13 @@ class AdaptiveController(Node):
 
 
     def send_wall_escape_goal(self, side):
+        
+        """
+        Wall escape logic, we inspect global pose of the robot and find a 
+        smaller goal point pointing opposite to the close wall
+        
+        it seemed to work well in narrow passages as well
+        """
 
         try:
             transform = self.tf_buffer.lookup_transform(
